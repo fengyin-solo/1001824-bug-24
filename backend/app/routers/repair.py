@@ -6,14 +6,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.repair import RepairService
+from app.services.repair import STATUS_ORDER, RepairService
 
 router = APIRouter(prefix="/api/repair", tags=["修复施工"])
 
 service = RepairService()
 
 LIST_FIELDS = ["修复单号", "关联缺陷", "修复方式", "承接单位", "开挖范围", "完成日期", "监理人员", "修复状态"]
-STATUSES = ["待开工", "施工中", "待验收", "已完工"]
+STATUSES = STATUS_ORDER
 
 
 @router.get("", response_model=PageResult[dict])
@@ -26,8 +26,23 @@ def list_entries(
     """按修复单号与状态过滤修复施工列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
+    if status and status not in STATUSES:
+        raise HTTPException(status_code=400, detail=f"状态「{status}」不在可筛选范围：{'、'.join(STATUSES)}")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/stats")
+def stats() -> dict[str, int]:
+    """修复施工概览卡片：按状态统计，动作成功后重新拉取即与列表同步。"""
+    return service.stats()
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出修复施工清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "repair", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -35,7 +50,7 @@ def get_entry(entry_id: int) -> dict:
     """读取单条修复单明细；不存在时给出可读的错误说明。"""
     entry = service.get_entry(entry_id)
     if entry is None:
-        raise HTTPException(status_code=404, detail=f"修复单 {entry_id} 不存在或已归档")
+        raise HTTPException(status_code=404, detail=f"修复单 {entry_id} 不存在或已归档，请返回列表确认")
     return entry
 
 
@@ -50,16 +65,15 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条修复单执行确认开工、提交验收、确认完工；不允许的动作会被拦下并说明原因。"""
+    """对单条修复单执行确认开工、提交验收、确认完工。
+
+    状态必须顺序推进；对已经处于目标状态的请求按幂等处理，
+    这样网络中断后的原样重试会返回成功并带回同一份数据，而不是报“重复提交”。
+    """
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, message, _retried = service.run_action(entry_id, action, payload.values)
     if entry is None:
+        # 业务规则未通过（缺字段、跳步等）：用 200 + ok=False 返回可读原因，
+        # 前端据此保留已填内容并允许重试。
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出修复施工清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "repair", "total": total, "items": items}
