@@ -25,6 +25,8 @@ class EntryPayload(BaseModel):
     """登记或修改一条业务记录时提交的字段集合。"""
 
     values: dict[str, Any] = Field(default_factory=dict)
+    # 状态流转动作（确认开工/提交验收/确认完工等），放在顶层避免被当成业务字段
+    action: str | None = None
     remark: str | None = None
 
 

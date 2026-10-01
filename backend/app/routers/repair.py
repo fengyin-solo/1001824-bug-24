@@ -6,14 +6,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.repair import RepairService
+from app.services.repair import STATUS_ORDER, RepairService
 
 router = APIRouter(prefix="/api/repair", tags=["修复施工"])
 
 service = RepairService()
-
-LIST_FIELDS = ["修复单号", "关联缺陷", "修复方式", "承接单位", "开挖范围", "完成日期", "监理人员", "修复状态"]
-STATUSES = ["待开工", "施工中", "待验收", "已完工"]
 
 
 @router.get("", response_model=PageResult[dict])
@@ -24,10 +21,30 @@ def list_entries(
     size: int = 20,
 ) -> PageResult[dict]:
     """按修复单号与状态过滤修复施工列表；没有数据时返回空页，不报错。"""
+    if status is not None and status not in STATUS_ORDER:
+        raise HTTPException(
+            status_code=400,
+            detail=f"状态「{status}」不在允许范围：{'、'.join(STATUS_ORDER)}",
+        )
+    if page < 1 or size < 1:
+        raise HTTPException(status_code=400, detail="页码与每页条数必须大于 0")
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/stats")
+def stats() -> dict[str, int]:
+    """修复施工概览卡片：总数随动作流转实时更新。"""
+    return service.stats()
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出修复施工清单：返回当前全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "repair", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -50,16 +67,14 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条修复单执行确认开工、提交验收、确认完工；不允许的动作会被拦下并说明原因。"""
-    action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    """对单条修复单执行确认开工、提交验收、确认完工；不允许的动作会被拦下并说明原因。
+
+    提交验收时完成日期、监理人员放在 values 里一起提交；网络中断重试是安全的：
+    一张单只会保留一条验收记录，后到的一份覆盖旧值。
+    """
+    action = str(payload.action or payload.values.get("action") or "").strip()
+    values = {key: value for key, value in payload.values.items() if key != "action"}
+    entry, message = service.run_action(entry_id, action, values)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出修复施工清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "repair", "total": total, "items": items}

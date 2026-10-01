@@ -9,6 +9,7 @@ const Patrol = () => import('@/views/patrol/index.vue')
 const Defect = () => import('@/views/defect/index.vue')
 const Cctv = () => import('@/views/cctv/index.vue')
 const Repair = () => import('@/views/repair/index.vue')
+const RepairDetail = () => import('@/views/repair/detail.vue')
 const Pressure = () => import('@/views/pressure/index.vue')
 const Flow = () => import('@/views/flow/index.vue')
 const Leak = () => import('@/views/leak/index.vue')
@@ -32,6 +33,7 @@ const router = createRouter({
     { path: '/defect', name: 'defect', component: Defect },
     { path: '/cctv', name: 'cctv', component: Cctv },
     { path: '/repair', name: 'repair', component: Repair },
+    { path: '/repair/:id', name: 'repair-detail', component: RepairDetail },
     { path: '/pressure', name: 'pressure', component: Pressure },
     { path: '/flow', name: 'flow', component: Flow },
     { path: '/leak', name: 'leak', component: Leak },
